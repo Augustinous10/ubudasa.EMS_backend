@@ -34,14 +34,20 @@ exports.finalizeAttendance = async (req, res) => {
       return res.status(400).json({ message: "Employees data and group image are required" });
     }
 
-    const employees = JSON.parse(req.body.employees);
+    let employees;
+    try {
+      employees = JSON.parse(req.body.employees);
+    } catch (parseErr) {
+      return res.status(400).json({ message: "Invalid employees JSON format" });
+    }
+
     const siteManagerId = req.user._id;
     const siteId = req.user.siteId;
     const imagePath = req.file.path;
 
-    // Normalize date to start of day
+    // Normalize date to start of day UTC (to avoid timezone issues)
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    today.setUTCHours(0, 0, 0, 0);
 
     const attendedEmployees = [];
 
@@ -60,6 +66,10 @@ exports.finalizeAttendance = async (req, res) => {
           site: siteId,
           createdBy: siteManagerId,
         });
+      }
+
+      if (!employee || !employee._id) {
+        return res.status(500).json({ message: "Failed to find or create employee" });
       }
 
       attendedEmployees.push({
@@ -99,7 +109,7 @@ exports.finalizeAttendance = async (req, res) => {
 
 // ✅ Create a new employee
 exports.createEmployee = async (req, res) => {
-  const { phone, name, currentSalary } = req.body; // Use defaultSalary to match model
+  const { phone, name, defaultSalary } = req.body; // Use defaultSalary as per your model
   const siteId = req.user.siteId;
 
   if (!phone || !name || defaultSalary == null) {
@@ -164,11 +174,10 @@ exports.updateEmployee = async (req, res) => {
   try {
     const updatedData = req.body;
 
-    // If updating salary, ensure the key matches model: currentSalary
-    if (updatedData.currentSalary != null) {
-      updatedData.currentSalary = updatedData.currentSalary;
-      delete updatedData.currentSalary;
-    }
+    // Remove any undefined or null keys to avoid accidental overwrites
+    Object.keys(updatedData).forEach(key => {
+      if (updatedData[key] == null) delete updatedData[key];
+    });
 
     const employee = await Employee.findOneAndUpdate(
       { _id: req.params.id, site: siteId },
