@@ -13,12 +13,17 @@ exports.getUnpaidEmployees = async (req, res) => {
 
     const from = new Date(startDate);
     const to = new Date(endDate);
-    to.setHours(23, 59, 59, 999);
+    from.setUTCHours(0, 0, 0, 0);
+    to.setUTCHours(23, 59, 59, 999);
+
+    console.log('Query dates:', from.toISOString(), to.toISOString());
 
     const attendanceRecords = await Attendance.find({
       siteManager: siteManagerId,
       date: { $gte: from, $lte: to },
     }).populate('attendedEmployees.employee');
+
+    console.log('Total attendance records found:', attendanceRecords.length);
 
     const unpaidEntries = [];
 
@@ -34,7 +39,7 @@ exports.getUnpaidEmployees = async (req, res) => {
       }
     }
 
-    console.log(`🟢 Found ${unpaidEntries.length} unpaid entries`);
+    console.log('Unpaid entries found:', unpaidEntries.length);
     res.json({ unpaidEmployees: unpaidEntries });
 
   } catch (error) {
@@ -66,10 +71,11 @@ exports.markEmployeesAsPaid = async (req, res) => {
       const siteManagerId = new mongoose.Types.ObjectId(siteManager);
       const employeeObjectId = new mongoose.Types.ObjectId(employeeId);
       const targetDate = new Date(date);
+
       const from = new Date(targetDate);
       const to = new Date(targetDate);
-      from.setHours(0, 0, 0, 0);
-      to.setHours(23, 59, 59, 999);
+      from.setUTCHours(0, 0, 0, 0);
+      to.setUTCHours(23, 59, 59, 999);
 
       console.log(`➡️ Processing payment for employee ${employeeId} on ${targetDate.toISOString()}`);
 
@@ -145,7 +151,8 @@ exports.getPaymentHistory = async (req, res) => {
 
     const from = new Date(startDate);
     const to = new Date(endDate);
-    to.setHours(23, 59, 59, 999);
+    from.setUTCHours(0, 0, 0, 0);
+    to.setUTCHours(23, 59, 59, 999);
 
     const history = await Payment.find({
       siteManager: siteManagerId,
