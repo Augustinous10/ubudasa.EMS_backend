@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Attendance = require('../models/Attendance');
 const Payment = require('../models/Payment');
 
-// ✅ Get unpaid employees
+// Get unpaid employees within a date range for a site manager
 exports.getUnpaidEmployees = async (req, res) => {
   try {
     const { siteManagerId, startDate, endDate } = req.query;
@@ -16,14 +16,11 @@ exports.getUnpaidEmployees = async (req, res) => {
     from.setUTCHours(0, 0, 0, 0);
     to.setUTCHours(23, 59, 59, 999);
 
-    console.log('Query dates:', from.toISOString(), to.toISOString());
-
+    // Find attendance records in date range for this site manager
     const attendanceRecords = await Attendance.find({
       siteManager: siteManagerId,
       date: { $gte: from, $lte: to },
     }).populate('attendedEmployees.employee');
-
-    console.log('Total attendance records found:', attendanceRecords.length);
 
     const unpaidEntries = [];
 
@@ -39,20 +36,18 @@ exports.getUnpaidEmployees = async (req, res) => {
       }
     }
 
-    console.log('Unpaid entries found:', unpaidEntries.length);
     res.json({ unpaidEmployees: unpaidEntries });
 
   } catch (error) {
-    console.error('❌ Error fetching unpaid employees:', error);
+    console.error('Error fetching unpaid employees:', error);
     res.status(500).json({ error: 'Failed to fetch unpaid employees' });
   }
 };
 
-// ✅ Mark employees as paid
+// Mark employees as paid (accepts payments array in request body)
 exports.markEmployeesAsPaid = async (req, res) => {
   try {
     const { payments } = req.body;
-    console.log('📥 Incoming request body:', payments);
 
     if (!Array.isArray(payments) || payments.length === 0) {
       return res.status(400).json({ error: 'payments must be a non-empty array' });
@@ -64,51 +59,56 @@ exports.markEmployeesAsPaid = async (req, res) => {
       const { employeeId, siteManager, date } = p;
 
       if (!mongoose.Types.ObjectId.isValid(employeeId) || !mongoose.Types.ObjectId.isValid(siteManager)) {
-        console.warn(`⚠️ Invalid ObjectId: employeeId=${employeeId}, siteManager=${siteManager}`);
+        console.warn(`Invalid ObjectId: employeeId=${employeeId}, siteManager=${siteManager}`);
         continue;
       }
 
       const siteManagerId = new mongoose.Types.ObjectId(siteManager);
       const employeeObjectId = new mongoose.Types.ObjectId(employeeId);
-      const targetDate = new Date(date);
 
+      const targetDate = new Date(date);
       const from = new Date(targetDate);
       const to = new Date(targetDate);
       from.setUTCHours(0, 0, 0, 0);
       to.setUTCHours(23, 59, 59, 999);
 
-      console.log(`➡️ Processing payment for employee ${employeeId} on ${targetDate.toISOString()}`);
-
+      // Find attendance for that site manager on that date
       const attendance = await Attendance.findOne({
         siteManager: siteManagerId,
         date: { $gte: from, $lte: to },
       });
 
       if (!attendance) {
-        console.warn(`⚠️ No attendance found for siteManager=${siteManagerId} on ${targetDate.toDateString()}`);
+        console.warn(`No attendance found for siteManager=${siteManagerId} on ${targetDate.toDateString()}`);
         continue;
       }
 
-      const attended = attendance.attendedEmployees.find(
-        (ae) => ae.employee.toString() === employeeObjectId.toString()
+      const attended = attendance.attendedEmployees.find(ae =>
+        ae.employee.toString() === employeeObjectId.toString()
       );
 
       if (!attended) {
-        console.warn(`⚠️ Employee ${employeeId} not found in attendance`);
+        console.warn(`Employee ${employeeId} not found in attendance`);
         continue;
       }
 
       if (attended.paymentStatus === 'PAID') {
-        console.log(`✅ Employee ${employeeId} already marked as paid`);
+        console.log(`Employee ${employeeId} already marked as paid`);
         continue;
       }
 
+      // Update payment status and paid timestamp
       attended.paymentStatus = 'PAID';
       attended.paidAt = new Date();
 
-      await attendance.save();
-      console.log(`✔️ Updated attendance for employee ${employeeId}`);
+      try {
+        await attendance.save();
+      } catch (err) {
+        console.error(`Failed to update attendance for employee ${employeeId}:`, err);
+        continue;
+      }
 
+      // Check if payment record already exists to avoid duplicates
       const existingPayment = await Payment.findOne({
         employee: employeeObjectId,
         siteManager: siteManagerId,
@@ -116,31 +116,36 @@ exports.markEmployeesAsPaid = async (req, res) => {
       });
 
       if (existingPayment) {
-        console.log(`🛑 Payment already recorded for employee ${employeeId}`);
+        console.log(`Payment already exists for employee ${employeeId}`);
         continue;
       }
 
+      // Create new payment record
       const newPayment = new Payment({
         employee: employeeObjectId,
-        date: targetDate,
         siteManager: siteManagerId,
+        date: targetDate,
         status: 'paid',
       });
 
-      await newPayment.save();
-      paymentRecords.push(newPayment);
-      console.log(`💰 Payment recorded for employee ${employeeId}`);
+      try {
+        await newPayment.save();
+        paymentRecords.push(newPayment);
+        console.log(`Payment recorded for employee ${employeeId}`);
+      } catch (err) {
+        console.error(`Failed to record payment for employee ${employeeId}:`, err);
+      }
     }
 
     res.status(201).json({ message: 'Marked as paid', records: paymentRecords });
 
   } catch (error) {
-    console.error('❌ Error marking employees as paid:', error);
+    console.error('Error marking employees as paid:', error);
     res.status(500).json({ error: 'Failed to mark employees as paid' });
   }
 };
 
-// ✅ Get payment history
+// Get payment history from attendance for employees marked as paid within a date range
 exports.getPaymentHistory = async (req, res) => {
   try {
     const { siteManagerId, startDate, endDate } = req.query;
@@ -154,15 +159,33 @@ exports.getPaymentHistory = async (req, res) => {
     from.setUTCHours(0, 0, 0, 0);
     to.setUTCHours(23, 59, 59, 999);
 
-    const history = await Payment.find({
+    // Query attendance for site manager and date range where at least one employee is paid
+    const attendanceRecords = await Attendance.find({
       siteManager: siteManagerId,
       date: { $gte: from, $lte: to },
-    }).populate('employee');
+      'attendedEmployees.paymentStatus': 'PAID',
+    }).populate('attendedEmployees.employee');
 
-    res.json({ paymentHistory: history });
+    const paymentHistory = [];
+
+    for (const record of attendanceRecords) {
+      for (const attended of record.attendedEmployees) {
+        if (attended.paymentStatus === 'PAID') {
+          paymentHistory.push({
+            employee: attended.employee,
+            siteManager: siteManagerId,
+            date: record.date,
+            salary: attended.salary,
+            paidAt: attended.paidAt || record.updatedAt,
+          });
+        }
+      }
+    }
+
+    res.json({ paymentHistory });
 
   } catch (error) {
-    console.error('❌ Error fetching payment history:', error);
+    console.error('Error fetching payment history:', error);
     res.status(500).json({ error: 'Failed to fetch payment history' });
   }
 };
