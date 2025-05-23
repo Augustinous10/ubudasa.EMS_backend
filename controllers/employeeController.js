@@ -27,7 +27,7 @@ exports.checkEmployeeByPhone = async (req, res) => {
   }
 };
 
-// ✅ Finalize attendance (with group image)
+// ✅ Finalize or update attendance with group image
 exports.finalizeAttendance = async (req, res) => {
   try {
     if (!req.body.employees || !req.file) {
@@ -45,11 +45,13 @@ exports.finalizeAttendance = async (req, res) => {
     const siteId = req.user.siteId;
     const imagePath = req.file.path;
 
-    // Normalize date to start of day UTC (to avoid timezone issues)
+    // Normalize date to start of day UTC
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
-    const attendedEmployees = [];
+    let attendance = await Attendance.findOne({ siteManager: siteManagerId, date: today });
+
+    const newAttendedEmployees = [];
 
     for (const e of employees) {
       if (!e.phone || !e.name || e.salary_today == null) {
@@ -59,20 +61,31 @@ exports.finalizeAttendance = async (req, res) => {
       let employee = await Employee.findOne({ phone: e.phone, site: siteId });
 
       if (!employee) {
-        employee = await Employee.create({
-          name: e.name,
-          phone: e.phone,
-          currentSalary: e.salary_today,
-          site: siteId,
-          createdBy: siteManagerId,
-        });
+        try {
+          employee = await Employee.create({
+            name: e.name,
+            phone: e.phone,
+            currentSalary: e.salary_today,
+            site: siteId,
+            createdBy: siteManagerId,
+          });
+        } catch (creationErr) {
+          console.error("Error creating employee:", creationErr);
+          return res.status(500).json({ message: "Failed to create a new employee" });
+        }
       }
 
       if (!employee || !employee._id) {
-        return res.status(500).json({ message: "Failed to find or create employee" });
+        console.warn("Skipping invalid employee:", e);
+        continue;
       }
 
-      attendedEmployees.push({
+      const alreadyPresent = attendance?.attendedEmployees.some(att =>
+        att.employee.toString() === employee._id.toString()
+      );
+      if (alreadyPresent) continue;
+
+      newAttendedEmployees.push({
         employee: employee._id,
         salary: e.salary_today,
         status: "Present",
@@ -81,24 +94,26 @@ exports.finalizeAttendance = async (req, res) => {
       });
     }
 
-    // Prevent duplicate attendance entry for the same day & siteManager
-    const existingAttendance = await Attendance.findOne({ siteManager: siteManagerId, date: today });
-    if (existingAttendance) {
-      return res.status(409).json({ message: "Attendance for today already finalized" });
+    if (newAttendedEmployees.length === 0) {
+      return res.status(409).json({ message: "No new employees to add for today" });
     }
 
-    const attendance = new Attendance({
-      siteManager: siteManagerId,
-      groupImage: imagePath,
-      date: today,
-      attendedEmployees,
-    });
-
-    await attendance.save();
+    if (attendance) {
+      attendance.attendedEmployees.push(...newAttendedEmployees);
+      await attendance.save();
+    } else {
+      attendance = new Attendance({
+        siteManager: siteManagerId,
+        groupImage: imagePath,
+        date: today,
+        attendedEmployees: newAttendedEmployees,
+      });
+      await attendance.save();
+    }
 
     res.status(201).json({
       success: true,
-      message: "Attendance finalized successfully.",
+      message: "Attendance finalized/updated successfully.",
       attendance,
     });
   } catch (err) {
@@ -109,7 +124,7 @@ exports.finalizeAttendance = async (req, res) => {
 
 // ✅ Create a new employee
 exports.createEmployee = async (req, res) => {
-  const { phone, name, defaultSalary } = req.body; // Use defaultSalary as per your model
+  const { phone, name, defaultSalary } = req.body;
   const siteId = req.user.siteId;
 
   if (!phone || !name || defaultSalary == null) {
@@ -129,6 +144,7 @@ exports.createEmployee = async (req, res) => {
       phone,
       name,
       defaultSalary,
+      currentSalary: defaultSalary,
       site: siteId,
       createdBy: req.user._id,
     });
@@ -173,8 +189,6 @@ exports.updateEmployee = async (req, res) => {
 
   try {
     const updatedData = req.body;
-
-    // Remove any undefined or null keys to avoid accidental overwrites
     Object.keys(updatedData).forEach(key => {
       if (updatedData[key] == null) delete updatedData[key];
     });
@@ -184,6 +198,7 @@ exports.updateEmployee = async (req, res) => {
       updatedData,
       { new: true }
     );
+
     if (!employee) return res.status(404).json({ message: "Employee not found or not allowed" });
 
     res.status(200).json(employee);

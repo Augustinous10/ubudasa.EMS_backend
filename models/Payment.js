@@ -1,11 +1,13 @@
 const mongoose = require('mongoose');
+const Schema = mongoose.Schema;
 
-const paymentSchema = new mongoose.Schema({
-  employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
-  siteManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  date: { type: Date, required: true },
-  status: { type: String, enum: ['paid'], default: 'paid' },
-  createdAt: { type: Date, default: Date.now }
-});
+const employeeSchema = new Schema({
+  name: String,
+  phone: { type: String, required: true },
+  currentSalary: Number,
+  site: { type: Schema.Types.ObjectId, ref: 'Site', required: true }, // ✅ Required site reference
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+}, { timestamps: true });
 
-module.exports = mongoose.model('Payment', paymentSchema);
+// ✅ Prevent OverwriteModelError on hot-reload
+module.exports = mongoose.models.Employee || mongoose.model('Employee', employeeSchema);
